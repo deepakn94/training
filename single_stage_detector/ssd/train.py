@@ -7,6 +7,8 @@ from ssd300 import SSD300
 import torch
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
+from distributed import DistributedDataParallel
+import torch.distributed as dist
 import time
 import numpy as np
 
@@ -35,6 +37,12 @@ def parse_args():
     parser.add_argument('--evaluation', nargs='*', type=int,
                         default=[120000, 160000, 180000, 200000, 220000, 240000],
                         help='iterations at which to evaluate')
+    parser.add_argument('--world-size', default=1, type=int,
+                        help='number of distributed processes')
+    parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+                        help='url used to set up distributed training')
+    parser.add_argument('--dist-backend', default='gloo', type=str,
+                        help='distributed backend')
     return parser.parse_args()
 
 
@@ -105,6 +113,8 @@ def coco_eval(model, coco, cocoGt, encoder, inv_map, threshold, use_cuda=True):
 
 
 def train300_mlperf_coco(args):
+    args.distributed = args.world_size > 1
+
     from coco import COCO
     # Check that GPUs are actually available
     use_cuda = not args.no_cuda and torch.cuda.is_available()
@@ -122,8 +132,12 @@ def train300_mlperf_coco(args):
     val_coco = COCODetection(val_coco_root, val_annotate, val_trans)
     train_coco = COCODetection(train_coco_root, train_annotate, train_trans)
 
-    #print("Number of labels: {}".format(train_coco.labelnum))
-    train_dataloader = DataLoader(train_coco, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_coco)
+    else:
+        train_sampler = None
+    train_dataloader = DataLoader(train_coco, batch_size=args.batch_size, shuffle=True,
+                                  num_workers=4, sampler=train_sampler)
 
     ssd300 = SSD300(train_coco.labelnum)
     if args.checkpoint is not None:
@@ -136,6 +150,12 @@ def train300_mlperf_coco(args):
     loss_func = Loss(dboxes)
     if use_cuda:
         loss_func.cuda()
+    if args.distributed:
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                world_size=args.world_size)
+        ssd300 = DistributedDataParallel(ssd300)
+    else:
+        ssd300 = torch.nn.DataParallel(ssd300)
 
     optim = torch.optim.SGD(ssd300.parameters(), lr=1e-3, momentum=0.9, weight_decay=5e-4)
     print("epoch", "nbatch", "loss")
