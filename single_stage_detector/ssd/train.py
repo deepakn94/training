@@ -85,7 +85,6 @@ def coco_eval(model, coco, cocoGt, encoder, inv_map, threshold, use_cuda=True):
             try:
                 result = encoder.decode_batch(ploc, plabel, 0.50, 200)[0]
             except:
-                #raise
                 print("")
                 print("No object detected in idx: {}".format(idx))
                 continue
@@ -168,6 +167,7 @@ def train300_mlperf_coco(args):
 
         for nbatch, (img, img_size, bbox, label) in enumerate(train_dataloader):
 
+            start = time.time()
             if iter_num == 160000:
                 print("")
                 print("lr decay step #1")
@@ -194,11 +194,14 @@ def train300_mlperf_coco(args):
 
             if not np.isinf(loss.item()): avg_loss = 0.999*avg_loss + 0.001*loss.item()
 
-            print("Iteration: {:6d}, Loss function: {:5.3f}, Average Loss: {:.3f}"\
-                        .format(iter_num, loss.item(), avg_loss), end="\r")
             optim.zero_grad()
             loss.backward()
             optim.step()
+            end = time.time()
+
+            if nbatch % 10 == 0:
+                print("Iteration: {:6d}, Loss function: {:5.3f}, Average Loss: {:.3f}, Average time: {:.3f} secs"\
+                            .format(iter_num, loss.item(), avg_loss, end - start))
 
             if iter_num in args.evaluation:
                 if not args.no_save:
